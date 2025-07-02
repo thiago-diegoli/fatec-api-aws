@@ -495,9 +495,9 @@ app.delete("/usuarios/:id", async (req, res) => {
 //#region S3
 AWS.config.update({
   region: process.env.REGION,
-  //accessKeyId: process.env.ACCESS_KEY_ID,
-  //secretAccessKey: process.env.SECRET_ACCESS_KEY,
-  //sessionToken: process.env.SESSION_TOKEN,
+  accessKeyId: process.env.ACCESS_KEY_ID,
+  secretAccessKey: process.env.SECRET_ACCESS_KEY,
+  sessionToken: process.env.SESSION_TOKEN,
 });
 
 const s3 = new AWS.S3();
@@ -669,6 +669,7 @@ const DB_NAME = process.env.DB_NAME || "api_aws_db";
 // Criar pool de conexões MySQL
 const pool = mysql.createPool({
   host: process.env.DB_HOST || "localhost",
+  port: process.env.DB_PORT || 3306,
   user: process.env.DB_USER || "root",
   password: process.env.DB_PASSWORD || "",
   waitForConnections: true,
