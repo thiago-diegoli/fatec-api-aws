@@ -30,6 +30,8 @@ app.use(express.json());
  * tags:
  *   - name: CRUD MongoDb
  *     description: Operações de CRUD para usuários no MongoDb.
+ *   - name: CRUD MySQL
+ *     description: Operações de CRUD para produtos no MySQL.
  *   - name: Buckets
  *     description: Operações de Listar buckets, upload e remoção de arquivo para um bucket S3.
  */
@@ -634,15 +636,32 @@ app.post(
  *         description: Arquivo deletado com sucesso
  */
 app.delete("/buckets/:bucketName/file/:fileName", async (req, res) => {
+  const { bucketName, fileName } = req.params;
+
   try {
-    logInfo("Objeto removido", req, data.Buckets);
+    const params = {
+      Bucket: bucketName,
+      Key: fileName,
+    };
+
+    await s3.deleteObject(params).promise();
+    logInfo("Objeto removido", req, { bucketName, fileName });
+    res.status(200).json({
+      message: "Arquivo deletado com sucesso",
+      deletedFile: fileName,
+      bucket: bucketName,
+    });
   } catch (error) {
     logError("Erro ao remover objeto", req, error);
+    res.status(500).json({
+      error: "Erro ao deletar arquivo do bucket",
+      details: error.message,
+    });
   }
 });
 //#endregion
 
-//#region MySql
+//#region CRUD MySQL
 const mysql = require("mysql2/promise");
 
 const DB_NAME = process.env.DB_NAME || "api_aws_db";
@@ -659,12 +678,66 @@ const pool = mysql.createPool({
 
 /**
  * @swagger
+ * /mysql/testar-conexao:
+ *   get:
+ *     tags:
+ *       - CRUD MySQL
+ *     summary: Testa a conexão com o MySQL
+ *     description: Verifica se a aplicação consegue se conectar ao MySQL.
+ *     responses:
+ *       200:
+ *         description: Conexão bem-sucedida
+ *       500:
+ *         description: Erro na conexão com o MySQL
+ */
+app.get("/mysql/testar-conexao", async (req, res) => {
+  try {
+    // Testar a conexão
+    const connection = await pool.getConnection();
+
+    // Verificar se o banco existe e tem produtos
+    await connection.query(`USE \`${DB_NAME}\``);
+    const [rows] = await connection.query(
+      "SELECT COUNT(*) as total FROM produto"
+    );
+
+    connection.release();
+
+    logInfo("Conexão com o MySQL verificada com sucesso", req);
+
+    const totalProdutos = rows[0].total;
+
+    res.status(200).json({
+      message:
+        totalProdutos > 0
+          ? `Conexão com o MySQL bem-sucedida! ${totalProdutos} produto(s) encontrado(s).`
+          : "Conexão com o MySQL bem-sucedida, mas nenhum produto encontrado.",
+      status: "connected",
+      hasProducts: totalProdutos > 0,
+      totalProducts: totalProdutos,
+    });
+  } catch (error) {
+    logError("Erro ao testar conexão com MySQL: " + error, req, error);
+    res.status(500).json({
+      error: "Erro na conexão com o MySQL",
+      details: error.message,
+    });
+  }
+});
+
+/**
+ * @swagger
  * /init-db:
  *   post:
+ *     tags:
+ *       - CRUD MySQL
  *     summary: Cria o banco de dados e a tabela produto
+ *     description: Inicializa o banco de dados MySQL e cria a tabela de produtos.
  *     responses:
  *       200:
  *         description: Banco de dados e tabela criados com sucesso
+ *       500:
+ *         description: Erro ao criar banco de dados
  */
 app.post("/init-db", async (req, res) => {
   try {
@@ -673,61 +746,17 @@ app.post("/init-db", async (req, res) => {
           Id INT AUTO_INCREMENT PRIMARY KEY,
           Nome VARCHAR(255) NOT NULL,
           Descricao VARCHAR(255) NOT NULL,
-          Preco DECIMAL(10,2) NOT NULL
+          Preco DECIMAL(10,2) NOT NULL,
+          createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         );`;
     await pool.query(createDB);
-    res.send("Banco de dados e tabela criados com sucesso.");
+    logInfo("Banco de dados e tabela criados com sucesso", req);
+    res
+      .status(200)
+      .json({ message: "Banco de dados e tabela criados com sucesso." });
   } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * @swagger
- * /produtos:
- *   get:
- *     summary: Lista todos os produtos
- *     responses:
- *       200:
- *         description: Lista de produtos
- */
-app.get("/produtos", async (req, res) => {
-  try {
-    await pool.query(`USE \`${DB_NAME}\``);
-    const [rows] = await pool.query("SELECT * FROM produto");
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/**
- * @swagger
- * /produtos/{id}:
- *   get:
- *     summary: Busca um produto pelo ID
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: integer
- *     responses:
- *       200:
- *         description: Produto encontrado
- *       404:
- *         description: Produto não encontrado
- */
-app.get("/produtos/:id", async (req, res) => {
-  try {
-    await pool.query(`USE \`${DB_NAME}\``);
-    const [rows] = await pool.query("SELECT * FROM produto WHERE id = ?", [
-      req.params.id,
-    ]);
-    if (rows.length === 0)
-      return res.status(404).json({ error: "Produto não encontrado" });
-    res.json(rows[0]);
-  } catch (err) {
+    logError("Erro ao criar banco de dados: " + err.message, req, err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -736,7 +765,10 @@ app.get("/produtos/:id", async (req, res) => {
  * @swagger
  * /produtos:
  *   post:
- *     summary: Cria um novo produto
+ *     tags:
+ *       - CRUD MySQL
+ *     summary: Criar um novo produto
+ *     description: Este endpoint cria um novo produto no sistema MySQL.
  *     requestBody:
  *       required: true
  *       content:
@@ -750,25 +782,285 @@ app.get("/produtos/:id", async (req, res) => {
  *             properties:
  *               Nome:
  *                 type: string
+ *                 description: Nome do produto
+ *                 minLength: 2
+ *                 maxLength: 255
  *               Descricao:
  *                 type: string
+ *                 description: Descrição do produto
+ *                 minLength: 2
+ *                 maxLength: 255
  *               Preco:
  *                 type: number
+ *                 description: Preço do produto
+ *                 minimum: 0
  *     responses:
  *       201:
- *         description: Produto criado
+ *         description: Produto criado com sucesso
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id:
+ *                   type: integer
+ *                   description: ID do produto criado
+ *                 Nome:
+ *                   type: string
+ *                 Descricao:
+ *                   type: string
+ *                 Preco:
+ *                   type: number
+ *       400:
+ *         description: Requisição inválida
+ *       500:
+ *         description: Erro interno do servidor
  */
 app.post("/produtos", async (req, res) => {
   const { Nome, Descricao, Preco } = req.body;
+
   try {
+    // Validação básica
+    if (!Nome || !Descricao || Preco === undefined) {
+      return res.status(400).json({
+        error: "Nome, Descrição e Preço são obrigatórios",
+      });
+    }
+
+    // Validações adicionais
+    if (Nome.length < 2 || Nome.length > 255) {
+      return res.status(400).json({
+        error: "Nome deve ter entre 2 e 255 caracteres",
+      });
+    }
+
+    if (Descricao.length < 2 || Descricao.length > 255) {
+      return res.status(400).json({
+        error: "Descrição deve ter entre 2 e 255 caracteres",
+      });
+    }
+
+    if (isNaN(Preco) || Preco < 0) {
+      return res.status(400).json({
+        error: "Preço deve ser um número positivo",
+      });
+    }
+
     await pool.query(`USE \`${DB_NAME}\``);
     const [result] = await pool.query(
       "INSERT INTO produto (Nome, Descricao, Preco) VALUES (?, ?, ?)",
-      [Nome, Descricao, Preco]
+      [Nome.trim(), Descricao.trim(), parseFloat(Preco)]
     );
-    res.status(201).json({ id: result.insertId });
+
+    const produtoId = result.insertId;
+    logInfo("Produto criado", req, { id: produtoId, Nome, Descricao, Preco });
+
+    res.status(201).json({
+      id: produtoId,
+      Nome: Nome.trim(),
+      Descricao: Descricao.trim(),
+      Preco: parseFloat(Preco),
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    logError("Erro ao criar produto", req, err);
+    res.status(500).json({ error: "Ocorreu um erro interno" });
+  }
+});
+
+/**
+ * @swagger
+ * /produtos:
+ *   get:
+ *     tags:
+ *       - CRUD MySQL
+ *     summary: Listar todos os produtos
+ *     description: Este endpoint retorna todos os produtos cadastrados no sistema MySQL com paginação opcional.
+ *     parameters:
+ *       - name: page
+ *         in: query
+ *         description: Número da página (padrão 1)
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *       - name: limit
+ *         in: query
+ *         description: Limite de produtos por página (padrão 10, máximo 100)
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *     responses:
+ *       200:
+ *         description: Lista de produtos
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 products:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       Id:
+ *                         type: integer
+ *                       Nome:
+ *                         type: string
+ *                       Descricao:
+ *                         type: string
+ *                       Preco:
+ *                         type: number
+ *                       createdAt:
+ *                         type: string
+ *                         format: date-time
+ *                       updatedAt:
+ *                         type: string
+ *                         format: date-time
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     currentPage:
+ *                       type: integer
+ *                     totalPages:
+ *                       type: integer
+ *                     totalProducts:
+ *                       type: integer
+ *                     hasNext:
+ *                       type: boolean
+ *                     hasPrev:
+ *                       type: boolean
+ *       400:
+ *         description: Parâmetros inválidos
+ *       500:
+ *         description: Erro interno do servidor
+ */
+app.get("/produtos", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+
+    // Validar limites
+    if (limit > 100) {
+      return res
+        .status(400)
+        .json({ error: "Limite máximo é 100 produtos por página" });
+    }
+
+    if (page < 1) {
+      return res
+        .status(400)
+        .json({ error: "Número da página deve ser maior que 0" });
+    }
+
+    const offset = (page - 1) * limit;
+
+    await pool.query(`USE \`${DB_NAME}\``);
+
+    // Buscar produtos com paginação
+    const [products] = await pool.query(
+      "SELECT * FROM produto ORDER BY createdAt DESC LIMIT ? OFFSET ?",
+      [limit, offset]
+    );
+
+    // Contar total de produtos
+    const [countResult] = await pool.query(
+      "SELECT COUNT(*) as total FROM produto"
+    );
+    const totalProducts = countResult[0].total;
+    const totalPages = Math.ceil(totalProducts / limit);
+
+    const pagination = {
+      currentPage: page,
+      totalPages,
+      totalProducts,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+    };
+
+    logInfo("Produtos encontrados", req, {
+      count: products.length,
+      page,
+      totalProducts,
+    });
+
+    res.json({
+      products,
+      pagination,
+    });
+  } catch (err) {
+    logError("Erro ao buscar produtos", req, err);
+    res.status(500).json({ error: "Ocorreu um erro interno" });
+  }
+});
+
+/**
+ * @swagger
+ * /produtos/{id}:
+ *   get:
+ *     tags:
+ *       - CRUD MySQL
+ *     summary: Obter um produto específico
+ *     description: Este endpoint retorna um produto baseado no ID fornecido.
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         description: ID do produto
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *     responses:
+ *       200:
+ *         description: Produto encontrado
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 Id:
+ *                   type: integer
+ *                 Nome:
+ *                   type: string
+ *                 Descricao:
+ *                   type: string
+ *                 Preco:
+ *                   type: number
+ *                 createdAt:
+ *                   type: string
+ *                   format: date-time
+ *                 updatedAt:
+ *                   type: string
+ *                   format: date-time
+ *       400:
+ *         description: ID inválido
+ *       404:
+ *         description: Produto não encontrado
+ *       500:
+ *         description: Erro interno do servidor
+ */
+app.get("/produtos/:id", async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+
+    // Validar se o ID é um número válido
+    if (isNaN(id) || id < 1) {
+      return res
+        .status(400)
+        .json({ error: "ID deve ser um número inteiro positivo" });
+    }
+
+    await pool.query(`USE \`${DB_NAME}\``);
+    const [rows] = await pool.query("SELECT * FROM produto WHERE Id = ?", [id]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Produto não encontrado" });
+    }
+
+    logInfo("Produto encontrado", req, rows[0]);
+    res.json(rows[0]);
+  } catch (err) {
+    logError("Erro ao buscar produto", req, err);
+    res.status(500).json({ error: "Ocorreu um erro interno" });
   }
 });
 
@@ -776,49 +1068,142 @@ app.post("/produtos", async (req, res) => {
  * @swagger
  * /produtos/{id}:
  *   put:
- *     summary: Atualiza um produto
+ *     tags:
+ *       - CRUD MySQL
+ *     summary: Atualizar um produto específico
+ *     description: Este endpoint atualiza um produto baseado no ID fornecido.
  *     parameters:
- *       - in: path
- *         name: id
+ *       - name: id
+ *         in: path
  *         required: true
+ *         description: ID do produto
  *         schema:
  *           type: integer
+ *           minimum: 1
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - Nome
- *               - Descricao
- *               - Preco
  *             properties:
  *               Nome:
  *                 type: string
+ *                 minLength: 2
+ *                 maxLength: 255
  *               Descricao:
  *                 type: string
+ *                 minLength: 2
+ *                 maxLength: 255
  *               Preco:
  *                 type: number
+ *                 minimum: 0
  *     responses:
  *       200:
  *         description: Produto atualizado
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 Id:
+ *                   type: integer
+ *                 Nome:
+ *                   type: string
+ *                 Descricao:
+ *                   type: string
+ *                 Preco:
+ *                   type: number
+ *                 createdAt:
+ *                   type: string
+ *                   format: date-time
+ *                 updatedAt:
+ *                   type: string
+ *                   format: date-time
+ *       400:
+ *         description: Dados inválidos
  *       404:
  *         description: Produto não encontrado
+ *       500:
+ *         description: Erro interno do servidor
  */
 app.put("/produtos/:id", async (req, res) => {
-  const { Nome, Descricao, Preco } = req.body;
   try {
+    const id = parseInt(req.params.id);
+
+    // Validar se o ID é um número válido
+    if (isNaN(id) || id < 1) {
+      return res
+        .status(400)
+        .json({ error: "ID deve ser um número inteiro positivo" });
+    }
+
+    const { Nome, Descricao, Preco } = req.body;
+
+    // Validação básica - pelo menos um campo deve ser fornecido
+    if (!Nome && !Descricao && Preco === undefined) {
+      return res.status(400).json({
+        error:
+          "Pelo menos um campo (Nome, Descrição ou Preço) deve ser fornecido",
+      });
+    }
+
+    // Validações específicas para cada campo
+    const updates = {};
+    if (Nome !== undefined) {
+      if (Nome.length < 2 || Nome.length > 255) {
+        return res.status(400).json({
+          error: "Nome deve ter entre 2 e 255 caracteres",
+        });
+      }
+      updates.Nome = Nome.trim();
+    }
+
+    if (Descricao !== undefined) {
+      if (Descricao.length < 2 || Descricao.length > 255) {
+        return res.status(400).json({
+          error: "Descrição deve ter entre 2 e 255 caracteres",
+        });
+      }
+      updates.Descricao = Descricao.trim();
+    }
+
+    if (Preco !== undefined) {
+      if (isNaN(Preco) || Preco < 0) {
+        return res.status(400).json({
+          error: "Preço deve ser um número positivo",
+        });
+      }
+      updates.Preco = parseFloat(Preco);
+    }
+
     await pool.query(`USE \`${DB_NAME}\``);
+
+    // Construir query dinamicamente
+    const updateFields = Object.keys(updates)
+      .map((key) => `${key} = ?`)
+      .join(", ");
+    const updateValues = Object.values(updates);
+    updateValues.push(id);
+
     const [result] = await pool.query(
-      "UPDATE produto SET Nome = ?, Descricao = ?, Preco = ? WHERE Id = ?",
-      [Nome, Descricao, Preco, req.params.id]
+      `UPDATE produto SET ${updateFields} WHERE Id = ?`,
+      updateValues
     );
-    if (result.affectedRows === 0)
+
+    if (result.affectedRows === 0) {
       return res.status(404).json({ error: "Produto não encontrado" });
-    res.json({ message: "Produto atualizado com sucesso" });
+    }
+
+    // Buscar o produto atualizado
+    const [rows] = await pool.query("SELECT * FROM produto WHERE Id = ?", [id]);
+    const produtoAtualizado = rows[0];
+
+    logInfo("Produto atualizado", req, produtoAtualizado);
+    res.json(produtoAtualizado);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    logError("Erro ao atualizar produto", req, err);
+    res.status(500).json({ error: "Ocorreu um erro interno" });
   }
 });
 
@@ -826,30 +1211,79 @@ app.put("/produtos/:id", async (req, res) => {
  * @swagger
  * /produtos/{id}:
  *   delete:
- *     summary: Deleta um produto
+ *     tags:
+ *       - CRUD MySQL
+ *     summary: Remover um produto específico
+ *     description: Este endpoint remove um produto baseado no ID fornecido.
  *     parameters:
- *       - in: path
- *         name: id
+ *       - name: id
+ *         in: path
  *         required: true
+ *         description: ID do produto
  *         schema:
  *           type: integer
+ *           minimum: 1
  *     responses:
  *       200:
- *         description: Produto deletado com sucesso
+ *         description: Produto removido com sucesso
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 deletedProduct:
+ *                   type: object
+ *                   properties:
+ *                     Id:
+ *                       type: integer
+ *                     Nome:
+ *                       type: string
+ *                     Descricao:
+ *                       type: string
+ *                     Preco:
+ *                       type: number
+ *       400:
+ *         description: ID inválido
  *       404:
  *         description: Produto não encontrado
+ *       500:
+ *         description: Erro interno do servidor
  */
 app.delete("/produtos/:id", async (req, res) => {
   try {
+    const id = parseInt(req.params.id);
+
+    // Validar se o ID é um número válido
+    if (isNaN(id) || id < 1) {
+      return res
+        .status(400)
+        .json({ error: "ID deve ser um número inteiro positivo" });
+    }
+
     await pool.query(`USE \`${DB_NAME}\``);
-    const [result] = await pool.query("DELETE FROM produto WHERE Id = ?", [
-      req.params.id,
-    ]);
-    if (result.affectedRows === 0)
+
+    // Primeiro buscar o produto para retornar suas informações
+    const [rows] = await pool.query("SELECT * FROM produto WHERE Id = ?", [id]);
+
+    if (rows.length === 0) {
       return res.status(404).json({ error: "Produto não encontrado" });
-    res.json({ message: "Produto deletado com sucesso" });
+    }
+
+    const produtoParaRemover = rows[0];
+
+    // Remover o produto
+    const [result] = await pool.query("DELETE FROM produto WHERE Id = ?", [id]);
+
+    logInfo("Produto removido", req, produtoParaRemover);
+    res.json({
+      message: "Produto removido com sucesso",
+      deletedProduct: produtoParaRemover,
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    logError("Erro ao remover produto", req, err);
+    res.status(500).json({ error: "Ocorreu um erro interno" });
   }
 });
 
