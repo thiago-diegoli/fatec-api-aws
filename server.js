@@ -742,16 +742,23 @@ app.get("/mysql/testar-conexao", async (req, res) => {
  */
 app.post("/init-db", async (req, res) => {
   try {
-    const createDB = `CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`; USE \`${DB_NAME}\`;
-        CREATE TABLE IF NOT EXISTS produto (
-          Id INT AUTO_INCREMENT PRIMARY KEY,
-          Nome VARCHAR(255) NOT NULL,
-          Descricao VARCHAR(255) NOT NULL,
-          Preco DECIMAL(10,2) NOT NULL,
-          createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        );`;
-    await pool.query(createDB);
+    // Primeiro, criar o banco de dados
+    await pool.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\``);
+
+    // Depois, usar o banco de dados e criar a tabela
+    await pool.query(`USE \`${DB_NAME}\``);
+
+    const createTableQuery = `CREATE TABLE IF NOT EXISTS produto (
+      Id INT AUTO_INCREMENT PRIMARY KEY,
+      Nome VARCHAR(255) NOT NULL,
+      Descricao VARCHAR(255) NOT NULL,
+      Preco DECIMAL(10,2) NOT NULL,
+      createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )`;
+
+    await pool.query(createTableQuery);
+
     logInfo("Banco de dados e tabela criados com sucesso", req);
     res
       .status(200)
