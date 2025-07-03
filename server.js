@@ -1300,4 +1300,8 @@ swaggerDocs(app);
 app.get("/version", (req, res) => {
   res.json({ version: "0.1.0" });
 });
+// Rota para verificar versão
+app.get("/version", (req, res) => {
+  res.json({ version: "0.1.1" });
+});
 app.listen(3000, () => console.log("Servidor rodando na porta 3000"));
