@@ -214,7 +214,6 @@ jobs:
             REPO_NAME="${{ needs.build.outputs.repo_name }}"
             VERSION="${{ needs.build.outputs.new_version }}"
             IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/$REPO_NAME:$VERSION"
-            ENV_PATH="/home/$(whoami)/.env"
 
             echo "🔄 Iniciando deploy da API: $IMAGE"
 
@@ -237,22 +236,19 @@ jobs:
             echo "⬇️ Baixando nova imagem..."
             docker pull $IMAGE
 
-            echo "📝 Criando arquivo .env no servidor..."
-            cat <<EOF > $ENV_PATH
-            MONGO_URI=${{ secrets.MONGO_URI }}
-            DB_HOST=${{ secrets.DB_HOST }}
-            DB_USER=${{ secrets.DB_USER }}
-            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
-            DB_NAME=${{ secrets.DB_NAME }}
-            DB_PORT=${{ secrets.DB_PORT }}
-            REGION=${{ secrets.REGION }}
-            LOG_GROUP_NAME=${{ secrets.LOG_GROUP_NAME }}
-            LOG_STREAM_NAME=${{ secrets.LOG_STREAM_NAME }}
-            EOF
+            echo "🚀 Subindo novo container da API... $REPO_NAME $IMAGE"
+            sudo docker run -d \
+              -p 3001:3000 \
+              --name $REPO_NAME \
+              -e MONGO_URI="${{ secrets.MONGO_URI }}" \
+              -e DB_HOST="${{ secrets.DB_HOST }}" \
+              -e DB_USER="${{ secrets.DB_USER }}" \
+              -e DB_PASSWORD="${{ secrets.DB_PASSWORD }}" \
+              -e DB_NAME="${{ secrets.DB_NAME }}" \
+              -e DB_PORT="${{ secrets.DB_PORT }}" \
+              -e REGION="${{ secrets.REGION }}" \
+              -e LOG_GROUP_NAME="${{ secrets.LOG_GROUP_NAME }}" \
+              -e LOG_STREAM_NAME="${{ secrets.LOG_STREAM_NAME }}" \
+              $IMAGE
 
-            echo "📄 Conteúdo do .env criado:"
-            cat $ENV_PATH
-
-            echo "🚀 Subindo novo container da API..."
-            docker run -d --env-file $ENV_PATH -p 3001:3000 --name $REPO_NAME $IMAGE
             echo "✅ Deploy da API concluído com sucesso!"
