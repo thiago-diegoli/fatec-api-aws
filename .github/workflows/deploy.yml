@@ -239,7 +239,7 @@ jobs:
             docker pull $IMAGE
 
             echo "📝 Criando arquivo .env no servidor..."
-            cat > .env << EOF
+            cat <<EOF > .env
             MONGO_URI=${{ secrets.MONGO_URI }}
             DB_HOST=${{ secrets.DB_HOST }}
             DB_USER=${{ secrets.DB_USER }}
