@@ -214,14 +214,13 @@ jobs:
             REPO_NAME="${{ needs.build.outputs.repo_name }}"
             VERSION="${{ needs.build.outputs.new_version }}"
             IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/$REPO_NAME:$VERSION"
+            ENV_PATH="/home/$(whoami)/.env"
 
             echo "🔄 Iniciando deploy da API: $IMAGE"
 
-            # Garantir que o Docker esteja disponível
             sudo yum update -y || sudo apt update -y
             sudo systemctl start docker || sudo service docker start
 
-            # Verificar container existente
             CONTAINER_ID=$(docker ps -q --filter "name=$REPO_NAME")
             if [ -n "$CONTAINER_ID" ]; then
               echo "⚙️ Container atual em execução:"
@@ -239,7 +238,7 @@ jobs:
             docker pull $IMAGE
 
             echo "📝 Criando arquivo .env no servidor..."
-            cat <<EOF > .env
+            cat <<EOF > $ENV_PATH
             MONGO_URI=${{ secrets.MONGO_URI }}
             DB_HOST=${{ secrets.DB_HOST }}
             DB_USER=${{ secrets.DB_USER }}
@@ -251,6 +250,9 @@ jobs:
             LOG_STREAM_NAME=${{ secrets.LOG_STREAM_NAME }}
             EOF
 
-            echo "🚀 Subindo novo container da API... $REPO_NAME $IMAGE"
-            docker run -d --env-file .env -p 3001:3000 --name $REPO_NAME $IMAGE
+            echo "📄 Conteúdo do .env criado:"
+            cat $ENV_PATH
+
+            echo "🚀 Subindo novo container da API..."
+            docker run -d --env-file $ENV_PATH -p 3001:3000 --name $REPO_NAME $IMAGE
             echo "✅ Deploy da API concluído com sucesso!"
