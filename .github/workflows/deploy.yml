@@ -252,5 +252,5 @@ jobs:
             EOF
 
             echo "🚀 Subindo novo container da API... $REPO_NAME $IMAGE"
-            docker run -d -p 3001:3000 --name $REPO_NAME $IMAGE
+            docker run -d --env-file .env -p 3001:3000 --name $REPO_NAME $IMAGE
             echo "✅ Deploy da API concluído com sucesso!"
