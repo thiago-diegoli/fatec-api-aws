@@ -238,6 +238,19 @@ jobs:
             echo "⬇️ Baixando nova imagem..."
             docker pull $IMAGE
 
+            echo "📝 Criando arquivo .env no servidor..."
+            cat > .env << EOF
+            MONGO_URI=${{ secrets.MONGO_URI }}
+            DB_HOST=${{ secrets.DB_HOST }}
+            DB_USER=${{ secrets.DB_USER }}
+            DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+            DB_NAME=${{ secrets.DB_NAME }}
+            DB_PORT=${{ secrets.DB_PORT }}
+            REGION=${{ secrets.REGION }}
+            LOG_GROUP_NAME=${{ secrets.LOG_GROUP_NAME }}
+            LOG_STREAM_NAME=${{ secrets.LOG_STREAM_NAME }}
+            EOF
+
             echo "🚀 Subindo novo container da API... $REPO_NAME $IMAGE"
             docker run -d -p 3001:3000 --name $REPO_NAME $IMAGE
             echo "✅ Deploy da API concluído com sucesso!"

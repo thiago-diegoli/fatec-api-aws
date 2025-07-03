@@ -1296,8 +1296,4 @@ app.delete("/produtos/:id", async (req, res) => {
 //#endregion
 
 swaggerDocs(app);
-// Rota para verificar versão
-app.get("/version", (req, res) => {
-  res.json({ version: "0.1.0" });
-});
 app.listen(3000, () => console.log("Servidor rodando na porta 3000"));
