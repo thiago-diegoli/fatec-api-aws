@@ -1,0 +1,313 @@
+name: Build and Deploy API Backend
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    outputs:
+      new_version: ${{ steps.version.outputs.new_version }}
+      repo_name: ${{ steps.define_repo_name.outputs.repo_name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      
+      # Verificar se o Node.js está disponível e validar a API
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: Validar estrutura da API
+        run: |
+          echo "Validando arquivos essenciais da API..."
+          if [ ! -f "server.js" ]; then
+            echo "❌ Arquivo server.js não encontrado!"
+            exit 1
+          fi
+          if [ ! -f "package.json" ]; then
+            echo "❌ Arquivo package.json não encontrado!"
+            exit 1
+          fi
+          echo "✅ Estrutura da API validada com sucesso!"
+
+      - name: Instalar semver
+        run: npm install -g semver
+
+      - name: Criar nova tag caso não exista
+        id: create_initial_tag
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          if [ -z "$(git tag)" ]; then
+            git config --global user.name 'github-actions'
+            git config --global user.email 'github-actions@github.com'
+            git tag -a v0.0.0 -m "Initial release"
+            git push origin v0.0.0
+          else
+            echo "Tag v0.0.0 já existe — nenhuma ação necessária."
+          fi
+
+      - name: Calcular nova versão
+        id: version
+        run: |
+          git fetch --tags
+          LAST_TAG=$(git describe --tags `git rev-list --tags --max-count=1`)
+          if [ -z "$LAST_TAG" ]; then
+            LAST_TAG="v0.0.0"
+          fi
+          echo "Versão Atual: $LAST_TAG"
+          
+          if [ "$LAST_TAG" = "v0.0.0" ]; then
+            COMMITS=$(git log --pretty=format:"%s")
+          else
+            COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"%s")
+          fi
+          
+          echo "Commits desde a última tag:"
+          echo "$COMMITS"
+          
+          # Inicializando variáveis
+          MAJOR=0
+          MINOR=0
+          PATCH=0
+          
+          # Analisando mensagens de commit
+          for COMMIT in "$COMMITS"; do
+            if [[ "$COMMIT" == *"BREAKING CHANGE"* ]]; then
+              MAJOR=1
+            elif [[ "$COMMIT" == *"feat"* ]]; then
+              MINOR=1
+            elif [[ "$COMMIT" == *"fix"* ]]; then
+              PATCH=1
+            fi
+          done
+          
+          # Calculando a nova versão usando semver
+          CURRENT_VERSION=${LAST_TAG#v}
+          NEW_VERSION=$CURRENT_VERSION
+          if [[ $MAJOR -eq 1 ]]; then
+            NEW_VERSION=$(semver -i major $CURRENT_VERSION)
+          elif [[ $MINOR -eq 1 ]]; then
+            NEW_VERSION=$(semver -i minor $CURRENT_VERSION)
+          elif [[ $PATCH -eq 1 ]]; then
+            NEW_VERSION=$(semver -i patch $CURRENT_VERSION)
+          fi
+          
+          echo "Vesões (atual / nova): $CURRENT_VERSION # $NEW_VERSION"
+
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+
+          if [ "$CURRENT_VERSION" == "$NEW_VERSION" ]; then
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+            echo "Manter versão atual: $CURRENT_VERSION"
+            echo "new_version=$CURRENT_VERSION" >> $GITHUB_ENV
+            echo "new_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+            echo "Nova versão: $NEW_VERSION"
+            echo "new_version=$NEW_VERSION" >> $GITHUB_ENV
+            echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Definir o nome do repositório
+        id: define_repo_name
+        run: |
+          REPO_NAME="${{ github.repository }}"
+          REPO_NAME="${REPO_NAME#*/}"
+          REPO_NAME=$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')  # Converter para minúsculas
+          echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV 
+          echo "repo_name=$REPO_NAME" >> $GITHUB_OUTPUT
+          echo "Repositório: $REPO_NAME"
+      
+      - name: Verificar e criar repositório no Docker Hub (se necessário)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          echo "Verificando repositório: $REPO_NAME"
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -u $DOCKERHUB_USERNAME:$DOCKERHUB_TOKEN \
+            "https://hub.docker.com/v2/repositories/$DOCKERHUB_USERNAME/$REPO_NAME/")
+          
+          if [ "$RESPONSE" -eq 404 ]; then
+            echo "Repositório não existe. Criando repositório no Docker Hub..."
+            curl -s -X POST -u $DOCKERHUB_USERNAME:$DOCKERHUB_TOKEN \
+              -H "Content-Type: application/json" \
+              -d '{"name": "'$REPO_NAME'", "is_private": true}' \
+              "https://hub.docker.com/v2/repositories/$DOCKERHUB_USERNAME/"
+            echo "Repositório $REPO_NAME criado com sucesso!"
+          else
+            echo "Repositório $REPO_NAME já existe no Docker Hub."
+          fi
+
+
+      - name: Criar imagem docker da API
+        if: steps.version.outputs.should_deploy == 'true'
+        run: |
+          echo "Iniciando build da imagem Docker da API para o repositório $REPO_NAME"
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/$REPO_NAME:$new_version .
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/$REPO_NAME:$new_version ${{ secrets.DOCKERHUB_USERNAME }}/$REPO_NAME:latest
+
+      - name: Efetuar push da imagem
+        if: steps.version.outputs.should_deploy == 'true'
+        run: |
+          echo "Fazendo push da imagem Docker para o Docker Hub ${{ secrets.DOCKERHUB_USERNAME }}/$REPO_NAME:$new_version" 
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/$REPO_NAME:$new_version
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/$REPO_NAME:latest
+
+      
+      - name: Atualizar versão no package.json
+        if: steps.version.outputs.should_deploy == 'true'
+        run: |
+          npm version $new_version --no-git-tag-version
+          
+      - name: Commit e push
+        if: steps.version.outputs.should_deploy == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          git config --global user.name 'github-actions'
+          git config --global user.email 'github-actions@github.com'
+          git add package.json
+          git commit -m "chore(release): version $new_version"
+          git tag v$new_version
+          git push origin main --tags
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build  # Garante que o job 'build' será executado antes
+
+
+    steps:
+      - name: Definir o nome do repositório (caso não exista)
+        if: needs.build.outputs.repo_name == '' || needs.build.outputs.repo_name == null
+        id: define_repo_name
+        run: |
+          REPO_NAME="${{ github.repository }}"
+          REPO_NAME="${REPO_NAME#*/}"
+          REPO_NAME=$(echo "$REPO_NAME" | tr '[:upper:]' '[:lower:]')
+          echo "REPO_NAME=$REPO_NAME" >> $GITHUB_ENV 
+          echo "repo_name=$REPO_NAME" >> $GITHUB_OUTPUT
+          echo "Repositório: $REPO_NAME"
+
+      - name: Verificar variáveis finais da API
+        run: |
+          echo "DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}"
+          echo "REPO_NAME: $REPO_NAME"
+          echo "NEW_VERSION: ${{ needs.build.outputs.new_version }}"
+          IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/$REPO_NAME:${{ needs.build.outputs.new_version }}"
+          echo "Imagem da API: $IMAGE"
+
+      #- name: Debug de variáveis
+      #  run: |
+      #    echo "DOCKERHUB_USERNAME=${{ secrets.DOCKERHUB_USERNAME }}"
+      #    echo "REPO_NAME=$REPO_NAME"
+      #    echo "NEW_VERSION=${{ needs.build.outputs.new_version }}"
+#
+      #    if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ] || [ -z "$REPO_NAME" ] || [ -z "${{ needs.build.outputs.new_version }}" ]; then
+      #      echo "❌ Uma ou mais variáveis estão vazias!"
+      #      exit 1
+      #    fi
+#
+      #    IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/$REPO_NAME:${{ needs.build.outputs.new_version }}"
+      #    echo "✅ Imagem completa: $IMAGE"
+#
+      #    CONTAINER="docker run -d -p 80:80 --name $REPO_NAME ${{ secrets.DOCKERHUB_USERNAME }}/$REPO_NAME:${{ needs.build.outputs.new_version }}"
+      #    echo "✅ Imagem completa: $CONTAINER"
+
+      - name: Deploy API Backend to EC2 via SSH
+        uses: appleboy/ssh-action@v0.1.5
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_PRIVATE_KEY }}
+          script: |
+            REPO_NAME="${{ needs.build.outputs.repo_name }}"
+            VERSION="${{ needs.build.outputs.new_version }}"
+            IMAGE="${{ secrets.DOCKERHUB_USERNAME }}/$REPO_NAME:$VERSION"
+
+            echo "🔄 Iniciando deploy da imagem: $IMAGE"
+
+            # Garantir que o Docker esteja disponível
+            sudo yum update -y || sudo apt update -y
+            sudo systemctl start docker || sudo service docker start
+
+            # Stop any process using port 80
+            echo "🔎 Verificando processos na porta 80..."
+            PID=$(sudo lsof -t -i:80)
+            if [ -n "$PID" ]; then
+              echo "🛑 Encerrando processo(s) na porta 80 (PID: $PID)..."
+              sudo kill -9 $PID
+            else
+              echo "ℹ️ Nenhum processo encontrado na porta 80."
+            fi
+                    
+            # Verificar container existente
+            CONTAINER_ID=$(docker ps -q --filter "name=$REPO_NAME")
+            if [ -n "$CONTAINER_ID" ]; then
+              echo "⚙️ Container atual em execução:"
+              docker inspect --format='{{.Config.Image}}' $CONTAINER_ID
+              echo "🛑 Parando e removendo container atual..."
+              docker rm -f $REPO_NAME || true
+            else
+              echo "ℹ️ Nenhum container atual encontrado com nome: $REPO_NAME"
+            fi
+                    
+            echo "🧹 Removendo imagem local antiga, se existir..."
+            docker rmi -f "$IMAGE" || echo "ℹ️ Nenhuma imagem antiga encontrada com a tag: $IMAGE"
+
+            echo "⬇️ Baixando nova imagem..."
+            docker pull $IMAGE
+
+            echo "🚀 Subindo novo container da API... $REPO_NAME $IMAGE"
+            docker run -d -p 80:3000 \
+              -e MONGO_URI="${{ secrets.MONGO_URI }}" \
+              -e DB_HOST="${{ secrets.DB_HOST }}" \
+              -e DB_PASSWORD="${{ secrets.DB_PASSWORD }}" \
+              -e DB_USER="${{ secrets.DB_USER }}" \
+              -e DB_PORT="${{ secrets.DB_PORT }}" \
+              -e REGION="${{ secrets.REGION }}" \
+              -e LOG_GROUP_NAME="${{ secrets.LOG_GROUP_NAME }}" \
+              -e LOG_STREAM_NAME="${{ secrets.LOG_STREAM_NAME }}" \
+              --restart=unless-stopped \
+              --name $REPO_NAME $IMAGE
+
+            echo "⏳ Aguardando a API inicializar..."
+            sleep 10
+
+            echo "🔍 Verificando se a API está respondendo..."
+            for i in {1..5}; do
+              if curl -f http://localhost:80/swagger > /dev/null 2>&1; then
+                echo "✅ API está online e respondendo!"
+                echo "📊 Swagger disponível em: http://localhost:80/swagger"
+                break
+              else
+                echo "⏳ Tentativa $i/5 - API ainda não está respondendo..."
+                sleep 5
+              fi
+              if [ $i -eq 5 ]; then
+                echo "❌ API não está respondendo após 5 tentativas"
+                echo "📋 Logs do container:"
+                docker logs $REPO_NAME --tail 20
+                exit 1
+              fi
+            done
+
+            echo "🎉 Deploy da API concluído com sucesso!"
+            echo "🌐 API disponível em: http://$(curl -s ifconfig.me):80"
+            echo "📖 Documentação: http://$(curl -s ifconfig.me):80/swagger"
