@@ -179,7 +179,7 @@ jobs:
           git add package.json server.js
           git commit -m "chore(release): version $new_version"
           git tag v$new_version
-          git push origin main --tags
+          git push origin master --tags
 
   deploy:
     runs-on: ubuntu-latest
