@@ -493,11 +493,9 @@ app.delete("/usuarios/:id", async (req, res) => {
 //#endregion
 
 //#region S3
+// AWS SDK irá automaticamente usar IAM Role da instância EC2
 AWS.config.update({
   region: process.env.REGION,
-  accessKeyId: process.env.ACCESS_KEY_ID,
-  secretAccessKey: process.env.SECRET_ACCESS_KEY,
-  sessionToken: process.env.SESSION_TOKEN,
 });
 
 const s3 = new AWS.S3();
