@@ -8,21 +8,13 @@ WORKDIR /app
 COPY package*.json ./
 
 # Instala as dependências
-RUN npm install --only=production
+RUN npm install
 
-# Copia o restante dos arquivos da aplicação
+# Copia o restante dos arquivos
 COPY . .
 
-# Cria um usuário não-root para executar a aplicação
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nodejs -u 1001
-
-# Muda a propriedade dos arquivos para o usuário nodejs
-RUN chown -R nodejs:nodejs /app
-USER nodejs
-
-# Expondo a porta 3000
+# Expondo a porta da API
 EXPOSE 3000
 
-# Comando para iniciar a API
+# Comando para iniciar a aplicação
 CMD ["npm", "start"]
