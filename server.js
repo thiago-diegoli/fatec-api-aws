@@ -1308,4 +1308,8 @@ app.get("/version", (req, res) => {
 app.get("/version", (req, res) => {
   res.json({ version: "0.1.2" });
 });
+// Rota para verificar versão
+app.get("/version", (req, res) => {
+  res.json({ version: "0.1.3" });
+});
 app.listen(3000, () => console.log("Servidor rodando na porta 3000"));
